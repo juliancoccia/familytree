@@ -494,10 +494,15 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
     .hidden {
       display: none;
     }
+
+    /* Avatar images */
   </style>
 </head>
 <body>
-  <!-- Header -->
+  <div id="staticView"></div>
+  <!-- end-static-view -->
+
+
   <div class="header">
     <h1 id="headerTitle">Offline Family Tree</h1>
     <button class="header-btn" onclick="openPersonList()" id="listBtn" style="display:none;">List</button>
@@ -2086,8 +2091,9 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
   <div id="staticView">
     ${staticViewsHtml}
   </div>
+  <!-- end-static-view -->
 
-  <!-- Header (shown when JS is enabled) -->
+
   <div class="header">
     <h1 id="headerTitle">Family Tree - ${escapeHtml(rootName)} (${memberCount} members)</h1>
     <button class="header-btn" onclick="openPersonList()" id="listBtn">List</button>
@@ -3037,12 +3043,20 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
     }
 
     function generateExportHtml(personsData, rootId) {
-      // This creates a full app export - the export IS the app
-      // It will have the same structure as this file
+      // Clone current document and update embedded data
       const rootPerson = personsData.find(p => p.id === rootId);
       const rootName = rootPerson ? getFullName(rootPerson) : 'Family Tree';
       const dateTimeStr = formatDateTime();
 
+      // Build new embedded data
+      const newEmbeddedData = JSON.stringify({
+        persons: personsData,
+        nextId: Math.max(...personsData.map(p => p.id), 0) + 1,
+        focusedPersonId: rootId,
+        lastModified: dateTimeStr
+      });
+
+      // Build avatar CSS
       let avatarCss = '';
       personsData.forEach(p => {
         if (p.picture) {
@@ -3051,6 +3065,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
         }
       });
 
+      // Build static views HTML
       let staticViewsHtml = '';
       personsData.forEach(p => {
         staticViewsHtml += \`<div class="person-view" id="p\${p.id}">\`;
@@ -3062,15 +3077,44 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
         '</div>';
       staticViewsHtml += \`<div class="footer">Updated on \${dateTimeStr} with <a href="https://github.com/juliancoccia/familytree" target="_blank">Julian's Family Tree App</a></div>\`;
 
-      const embeddedData = JSON.stringify({
-        persons: personsData,
-        nextId: Math.max(...personsData.map(p => p.id), 0) + 1,
-        focusedPersonId: rootId,
-        lastModified: dateTimeStr
-      });
+      // Get current document HTML and update it
+      let html = document.documentElement.outerHTML;
 
-      // Return current document with embedded data
-      return generateFullAppHtml(rootName, personsData.length, avatarCss, staticViewsHtml, embeddedData);
+      // Update the embedded data
+      html = html.replace(
+        /<script id="embeddedData" type="application\\/json">[^<]*<\\/script>/,
+        '<script id="embeddedData" type="application/json">' + newEmbeddedData + '<\\/script>'
+      );
+
+      // Update the static view (use end marker)
+      html = html.replace(
+        /<div id="staticView">[\\s\\S]*?<!-- end-static-view -->/,
+        '<div id="staticView">' + staticViewsHtml + '</div>\\n  <!-- end-static-view -->'
+      );
+
+      // Update avatar CSS (between /* Avatar images */ markers or append to style)
+      const avatarCssMarker = /\\/\\* Avatar images \\*\\/[\\s\\S]*?(?=\\/\\*|<\\/style>)/;
+      if (avatarCssMarker.test(html)) {
+        html = html.replace(avatarCssMarker, '/* Avatar images */' + avatarCss + '\\n    ');
+      }
+
+      // Update title
+      html = html.replace(/<title>[^<]*<\\/title>/, '<title>Family Tree - ' + escapeHtml(rootName) + '</title>');
+
+      // Update header title
+      const memberCount = personsData.length;
+      const headerTitle = 'Offline Family Tree' + (memberCount > 0 ? ' (' + memberCount + ' members)' : '');
+      html = html.replace(
+        /<h1 id="headerTitle">[^<]*<\\/h1>/,
+        '<h1 id="headerTitle">' + headerTitle + '</h1>'
+      );
+
+      // Add DOCTYPE if missing
+      if (!html.startsWith('<!DOCTYPE') && !html.startsWith('<!--')) {
+        html = '<!DOCTYPE html>\\n' + html;
+      }
+
+      return html;
     }
 
     function renderPersonViewHtml(personId, personsData) {
