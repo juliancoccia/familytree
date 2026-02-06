@@ -50,6 +50,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
 
     /* Main content */
     .main-content {
+      display: block;
       padding: 20px;
       max-width: 1400px;
       margin: 0 auto;
@@ -495,6 +496,16 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
       display: none;
     }
 
+    /* Static view (CSS-only navigation for no-JS environments) */
+    #staticView {
+      padding: 20px;
+    }
+    .person-view { display: none; text-align: center; }
+    .person-view:target { display: block; }
+    .person-view:target ~ .default-view { display: none; }
+    .default-view { display: block; }
+    #staticView a { text-decoration: none; color: inherit; }
+
     /* Avatar images */
   </style>
 </head>
@@ -723,23 +734,24 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
     function getSpouses(personId) {
       const children = getChildren(personId);
       const spouseIds = new Set();
+      // Add co-parents (people who share children with this person)
       children.forEach(child => {
         if (child.fatherId && child.fatherId !== personId) spouseIds.add(child.fatherId);
         if (child.motherId && child.motherId !== personId) spouseIds.add(child.motherId);
       });
-      // If no children, check explicit spouseId (bidirectional)
+      // Check explicit spouseId (only if no children, since co-parents already shown)
       if (children.length === 0) {
         const person = getPersonById(personId);
         if (person && person.spouseId) {
           spouseIds.add(person.spouseId);
         }
-        // Also check if anyone else has this person as their spouse
-        persons.forEach(p => {
-          if (p.spouseId === personId && getChildren(p.id).length === 0) {
-            spouseIds.add(p.id);
-          }
-        });
       }
+      // Always check if any childless person has this person as their spouse (bidirectional)
+      persons.forEach(p => {
+        if (p.spouseId === personId && getChildren(p.id).length === 0) {
+          spouseIds.add(p.id);
+        }
+      });
       return Array.from(spouseIds).map(id => getPersonById(id)).filter(p => p);
     }
 
@@ -1213,169 +1225,22 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
         const parser = new DOMParser();
         const doc = parser.parseFromString(htmlContent, 'text/html');
 
-        // First, extract avatar images from CSS (new deduplicated format)
-        // Pattern: .avatar-{id}{background-image:url("data:image/...");...}
-        const cssAvatarMap = new Map();
-        const styleEl = doc.querySelector('style');
-        if (styleEl) {
-          const cssText = styleEl.textContent;
-          const cssAvatarPattern = /\.avatar-(\d+)\s*\{[^}]*background-image:\s*url\(["']?([^"')]+)["']?\)/g;
-          let cssMatch;
-          while ((cssMatch = cssAvatarPattern.exec(cssText)) !== null) {
-            const personId = parseInt(cssMatch[1]);
-            const imageUrl = cssMatch[2];
-            cssAvatarMap.set(personId, imageUrl);
-          }
+        const embeddedDataEl = doc.getElementById('embeddedData');
+        if (!embeddedDataEl) {
+          alert('Invalid file: no embedded data found.');
+          return;
         }
 
-        // Find all person views
-        const personViews = doc.querySelectorAll('.person-view');
-        const parsedPersons = new Map();
-
-        personViews.forEach(view => {
-          const id = view.id;
-          if (!id || id === 'default') return;
-
-          const personId = parseInt(id.replace('p', ''));
-          if (isNaN(personId)) return;
-
-          // Find the focused card (it has the .focused class)
-          const focusedCard = view.querySelector('.card.focused');
-          if (!focusedCard) return;
-
-          // Parse person data from the focused card
-          const personData = parseCardData(focusedCard, personId, cssAvatarMap);
-
-          // Parse bio
-          const bioContent = view.querySelector('.bio-content');
-          if (bioContent) {
-            const bioText = bioContent.textContent.trim();
-            if (bioText && bioText !== 'No biography available.') {
-              personData.bio = bioText;
-            }
-          }
-
-          parsedPersons.set(personId, personData);
-        });
-
-        // Now parse relationships by examining the structure
-        personViews.forEach(view => {
-          const id = view.id;
-          if (!id || id === 'default') return;
-
-          const personId = parseInt(id.replace('p', ''));
-          if (isNaN(personId)) return;
-
-          const person = parsedPersons.get(personId);
-          if (!person) return;
-
-          // Find parents row
-          const rows = view.querySelectorAll('.row');
-          const labels = view.querySelectorAll('.row-label');
-
-          labels.forEach((label, idx) => {
-            const labelText = label.textContent.trim().toUpperCase();
-            const row = rows[idx];
-            if (!row) return;
-
-            if (labelText === 'PARENTS') {
-              const parentCards = row.querySelectorAll('.card:not(.focused)');
-              parentCards.forEach(card => {
-                const link = card.querySelector('a');
-                if (link) {
-                  const href = link.getAttribute('href') || card.getAttribute('onclick');
-                  const parentId = extractIdFromHref(href || card.outerHTML);
-                  if (parentId) {
-                    const parentPerson = parsedPersons.get(parentId);
-                    if (parentPerson) {
-                      if (parentPerson.gender === 'male') {
-                        person.fatherId = parentId;
-                      } else if (parentPerson.gender === 'female') {
-                        person.motherId = parentId;
-                      }
-                    }
-                  }
-                }
-              });
-            }
-          });
-        });
-
-        // Alternative: parse parent links from card wrappers
-        personViews.forEach(view => {
-          const id = view.id;
-          if (!id || id === 'default') return;
-
-          const personId = parseInt(id.replace('p', ''));
-          const person = parsedPersons.get(personId);
-          if (!person) return;
-
-          // Look for parent links
-          const allLinks = view.querySelectorAll('a[href^="#p"]');
-          const rows = view.querySelectorAll('.row');
-
-          // Check if there's a PARENTS label
-          const parentsLabel = Array.from(view.querySelectorAll('.row-label')).find(
-            l => l.textContent.trim().toUpperCase() === 'PARENTS'
-          );
-
-          if (parentsLabel) {
-            const parentRow = parentsLabel.nextElementSibling;
-            if (parentRow && parentRow.classList.contains('row')) {
-              const parentLinks = parentRow.querySelectorAll('a[href^="#p"]');
-              parentLinks.forEach(link => {
-                const href = link.getAttribute('href');
-                const parentId = parseInt(href.replace('#p', ''));
-                if (!isNaN(parentId) && parentId !== personId) {
-                  const parentPerson = parsedPersons.get(parentId);
-                  if (parentPerson) {
-                    if (parentPerson.gender === 'male' && !person.fatherId) {
-                      person.fatherId = parentId;
-                    } else if (parentPerson.gender === 'female' && !person.motherId) {
-                      person.motherId = parentId;
-                    } else if (!person.fatherId) {
-                      person.fatherId = parentId;
-                    } else if (!person.motherId) {
-                      person.motherId = parentId;
-                    }
-                  }
-                }
-              });
-            }
-          }
-        });
-
-        // Convert to array and load
-        persons = Array.from(parsedPersons.values());
-        nextId = Math.max(...persons.map(p => p.id), 0) + 1;
-
-        // Find the default view's focused person
-        const defaultView = doc.querySelector('.default-view');
-        if (defaultView) {
-          const focusedCard = defaultView.querySelector('.card.focused');
-          if (focusedCard) {
-            // Try to find the person ID from links in the same row
-            const row = focusedCard.closest('.row');
-            if (row) {
-              const allCards = row.querySelectorAll('.card');
-              allCards.forEach(card => {
-                if (card.classList.contains('focused')) {
-                  // This is the focused card, try to find its ID
-                  const view = card.closest('.person-view');
-                  if (view && view.id && view.id !== 'default') {
-                    focusedPersonId = parseInt(view.id.replace('p', ''));
-                  }
-                }
-              });
-            }
-          }
+        const embeddedData = JSON.parse(embeddedDataEl.textContent);
+        if (!embeddedData || !embeddedData.persons || embeddedData.persons.length === 0) {
+          alert('Invalid file: no family data found.');
+          return;
         }
 
-        // If we couldn't determine focused person, use first one
-        if (!focusedPersonId || !getPersonById(focusedPersonId)) {
-          focusedPersonId = persons.length > 0 ? persons[0].id : null;
-        }
-
+        persons = embeddedData.persons;
+        nextId = embeddedData.nextId || (Math.max(...persons.map(p => p.id), 0) + 1);
+        focusedPersonId = embeddedData.focusedPersonId || persons[0].id;
+        lastModified = embeddedData.lastModified || null;
         render();
         autoSave();
         alert(`Loaded ${persons.length} family members.`);
@@ -1383,117 +1248,6 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
         console.error('Error parsing HTML:', error);
         alert('Error parsing HTML file. Make sure it\'s a valid Family Tree export.');
       }
-    }
-
-    function parseCardData(card, personId, cssAvatarMap = new Map()) {
-      const person = {
-        id: personId,
-        givenName: '',
-        lastName: '',
-        gender: null,
-        birthYear: null,
-        birthMonth: null,
-        birthDay: null,
-        birthPlace: null,
-        fatherId: null,
-        motherId: null,
-        spouseId: null,
-        picture: null,
-        bio: null
-      };
-
-      // Parse name
-      const nameEl = card.querySelector('.name');
-      if (nameEl) {
-        const fullName = nameEl.textContent.trim();
-        const parts = fullName.split(' ');
-        if (parts.length >= 2) {
-          person.givenName = parts[0];
-          person.lastName = parts.slice(1).join(' ');
-        } else {
-          person.givenName = fullName;
-          person.lastName = '';
-        }
-      }
-
-      // Parse gender from avatar class
-      let avatar = card.querySelector('.avatar');
-      if (!avatar) {
-        avatar = card.querySelector('[class*="avatar"]');
-      }
-
-      if (avatar) {
-        const avatarClass = avatar.getAttribute('class') || avatar.className || '';
-        const classStr = String(avatarClass).toLowerCase();
-        if (classStr.includes('female')) {
-          person.gender = 'female';
-        } else if (classStr.includes('male')) {
-          person.gender = 'male';
-        } else {
-          person.gender = null;
-        }
-
-        // Parse photo - first check CSS map (new format), then inline img (old format)
-        if (cssAvatarMap.has(personId)) {
-          person.picture = cssAvatarMap.get(personId);
-        } else {
-          const img = avatar.querySelector('img');
-          if (img) {
-            const src = img.getAttribute('src') || img.src;
-            if (src) person.picture = src;
-          }
-        }
-      }
-
-      // Parse birth date
-      const birthEl = card.querySelector('.birth');
-      if (birthEl) {
-        const birthText = birthEl.textContent.trim();
-        const parsed = parseBirthDate(birthText);
-        person.birthYear = parsed.year;
-        person.birthMonth = parsed.month;
-        person.birthDay = parsed.day;
-      }
-
-      // Parse birth place
-      const placeEl = card.querySelector('.place');
-      if (placeEl) {
-        person.birthPlace = placeEl.textContent.trim();
-      }
-
-      return person;
-    }
-
-    function parseBirthDate(text) {
-      const months = ['january', 'february', 'march', 'april', 'may', 'june',
-                      'july', 'august', 'september', 'october', 'november', 'december'];
-
-      const result = { year: null, month: null, day: null };
-
-      // Try to find year (4 digits)
-      const yearMatch = text.match(/\b(\d{4})\b/);
-      if (yearMatch) result.year = parseInt(yearMatch[1]);
-
-      // Try to find month
-      const lowerText = text.toLowerCase();
-      months.forEach((m, idx) => {
-        if (lowerText.includes(m)) result.month = idx + 1;
-      });
-
-      // Try to find day (1-2 digits, but not 4 digits which would be year)
-      const dayMatch = text.match(/\b(\d{1,2})\b(?!\d)/);
-      if (dayMatch) {
-        const day = parseInt(dayMatch[1]);
-        if (day >= 1 && day <= 31) result.day = day;
-      }
-
-      return result;
-    }
-
-    function extractIdFromHref(text) {
-      const match = text.match(/#p(\d+)/);
-      if (match) return parseInt(match[1]);
-      return null;
     }
 
     // ============================================
@@ -1642,6 +1396,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
     .person-view:target { display: block; }
     .person-view:target ~ .default-view { display: none; }
     .default-view { display: block; }
+    #staticView a { text-decoration: none; color: inherit; }
 
     /* Person title */
     .person-title {
@@ -2312,23 +2067,24 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
     function getSpouses(personId) {
       const children = getChildren(personId);
       const spouseIds = new Set();
+      // Add co-parents (people who share children with this person)
       children.forEach(child => {
         if (child.fatherId && child.fatherId !== personId) spouseIds.add(child.fatherId);
         if (child.motherId && child.motherId !== personId) spouseIds.add(child.motherId);
       });
-      // If no children, check explicit spouseId (bidirectional)
+      // Check explicit spouseId (only if no children, since co-parents already shown)
       if (children.length === 0) {
         const person = getPersonById(personId);
         if (person && person.spouseId) {
           spouseIds.add(person.spouseId);
         }
-        // Also check if anyone else has this person as their spouse
-        persons.forEach(p => {
-          if (p.spouseId === personId && getChildren(p.id).length === 0) {
-            spouseIds.add(p.id);
-          }
-        });
       }
+      // Always check if any childless person has this person as their spouse (bidirectional)
+      persons.forEach(p => {
+        if (p.spouseId === personId && getChildren(p.id).length === 0) {
+          spouseIds.add(p.id);
+        }
+      });
       return Array.from(spouseIds).map(id => getPersonById(id)).filter(p => p);
     }
 
@@ -2794,120 +2550,22 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
         const parser = new DOMParser();
         const doc = parser.parseFromString(htmlContent, 'text/html');
 
-        // First check for embedded data (new format)
         const embeddedDataEl = doc.getElementById('embeddedData');
-        if (embeddedDataEl) {
-          try {
-            const embeddedData = JSON.parse(embeddedDataEl.textContent);
-            if (embeddedData && embeddedData.persons && embeddedData.persons.length > 0) {
-              persons = embeddedData.persons;
-              nextId = embeddedData.nextId || (Math.max(...persons.map(p => p.id), 0) + 1);
-              focusedPersonId = embeddedData.focusedPersonId || persons[0].id;
-              lastModified = embeddedData.lastModified || null;
-              render();
-              autoSave();
-              alert(\`Loaded \${persons.length} family members.\`);
-              return;
-            }
-          } catch (e) {
-            // Continue to legacy parsing
-          }
+        if (!embeddedDataEl) {
+          alert('Invalid file: no embedded data found.');
+          return;
         }
 
-        // Legacy: extract avatar images from CSS
-        const cssAvatarMap = new Map();
-        const styleEl = doc.querySelector('style');
-        if (styleEl) {
-          const cssText = styleEl.textContent;
-          const cssAvatarPattern = /\\.avatar-(\\d+)\\s*\\{[^}]*background-image:\\s*url\\(["']?([^"')]+)["']?\\)/g;
-          let cssMatch;
-          while ((cssMatch = cssAvatarPattern.exec(cssText)) !== null) {
-            const personId = parseInt(cssMatch[1]);
-            const imageUrl = cssMatch[2];
-            cssAvatarMap.set(personId, imageUrl);
-          }
+        const embeddedData = JSON.parse(embeddedDataEl.textContent);
+        if (!embeddedData || !embeddedData.persons || embeddedData.persons.length === 0) {
+          alert('Invalid file: no family data found.');
+          return;
         }
 
-        const personViews = doc.querySelectorAll('.person-view');
-        const parsedPersons = new Map();
-
-        personViews.forEach(view => {
-          const id = view.id;
-          if (!id || id === 'default') return;
-
-          const personId = parseInt(id.replace('p', ''));
-          if (isNaN(personId)) return;
-
-          const focusedCard = view.querySelector('.card.focused');
-          if (!focusedCard) return;
-
-          const personData = parseCardData(focusedCard, personId, cssAvatarMap);
-
-          const bioContent = view.querySelector('.bio-content');
-          if (bioContent) {
-            const bioText = bioContent.textContent.trim();
-            if (bioText && bioText !== 'No biography available.') {
-              personData.bio = bioText;
-            }
-          }
-
-          parsedPersons.set(personId, personData);
-        });
-
-        // Parse parent relationships
-        personViews.forEach(view => {
-          const id = view.id;
-          if (!id || id === 'default') return;
-
-          const personId = parseInt(id.replace('p', ''));
-          const person = parsedPersons.get(personId);
-          if (!person) return;
-
-          const parentsLabel = Array.from(view.querySelectorAll('.row-label')).find(
-            l => l.textContent.trim().toUpperCase() === 'PARENTS'
-          );
-
-          if (parentsLabel) {
-            const parentRow = parentsLabel.nextElementSibling;
-            if (parentRow && parentRow.classList.contains('row')) {
-              const parentLinks = parentRow.querySelectorAll('a[href^="#p"]');
-              parentLinks.forEach(link => {
-                const href = link.getAttribute('href');
-                const parentId = parseInt(href.replace('#p', ''));
-                if (!isNaN(parentId) && parentId !== personId) {
-                  const parentPerson = parsedPersons.get(parentId);
-                  if (parentPerson) {
-                    if (parentPerson.gender === 'male' && !person.fatherId) {
-                      person.fatherId = parentId;
-                    } else if (parentPerson.gender === 'female' && !person.motherId) {
-                      person.motherId = parentId;
-                    } else if (!person.fatherId) {
-                      person.fatherId = parentId;
-                    } else if (!person.motherId) {
-                      person.motherId = parentId;
-                    }
-                  }
-                }
-              });
-            }
-          }
-        });
-
-        persons = Array.from(parsedPersons.values());
-        nextId = Math.max(...persons.map(p => p.id), 0) + 1;
-
-        const defaultView = doc.querySelector('.default-view');
-        if (defaultView) {
-          const viewId = defaultView.id;
-          if (viewId && viewId.startsWith('p')) {
-            focusedPersonId = parseInt(viewId.replace('p', ''));
-          }
-        }
-
-        if (!focusedPersonId || !getPersonById(focusedPersonId)) {
-          focusedPersonId = persons.length > 0 ? persons[0].id : null;
-        }
-
+        persons = embeddedData.persons;
+        nextId = embeddedData.nextId || (Math.max(...persons.map(p => p.id), 0) + 1);
+        focusedPersonId = embeddedData.focusedPersonId || persons[0].id;
+        lastModified = embeddedData.lastModified || null;
         render();
         autoSave();
         alert(\`Loaded \${persons.length} family members.\`);
@@ -2915,96 +2573,6 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
         console.error('Error parsing HTML:', error);
         alert('Error parsing HTML file. Make sure it is a valid Family Tree export.');
       }
-    }
-
-    function parseCardData(card, personId, cssAvatarMap = new Map()) {
-      const person = {
-        id: personId,
-        givenName: '',
-        lastName: '',
-        gender: null,
-        birthYear: null,
-        birthMonth: null,
-        birthDay: null,
-        birthPlace: null,
-        fatherId: null,
-        motherId: null,
-        spouseId: null,
-        picture: null,
-        bio: null
-      };
-
-      const nameEl = card.querySelector('.name');
-      if (nameEl) {
-        const fullName = nameEl.textContent.trim();
-        const parts = fullName.split(' ');
-        if (parts.length >= 2) {
-          person.lastName = parts.pop();
-          person.givenName = parts.join(' ');
-        } else {
-          person.givenName = fullName;
-          person.lastName = '';
-        }
-      }
-
-      let avatar = card.querySelector('.avatar');
-      if (avatar) {
-        const avatarClass = avatar.getAttribute('class') || '';
-        if (avatarClass.includes('female')) {
-          person.gender = 'female';
-        } else if (avatarClass.includes('male')) {
-          person.gender = 'male';
-        }
-
-        if (cssAvatarMap.has(personId)) {
-          person.picture = cssAvatarMap.get(personId);
-        } else {
-          const img = avatar.querySelector('img');
-          if (img) {
-            const src = img.getAttribute('src') || img.src;
-            if (src) person.picture = src;
-          }
-        }
-      }
-
-      const birthEl = card.querySelector('.birth');
-      if (birthEl) {
-        const birthText = birthEl.textContent.trim();
-        const parsed = parseBirthDate(birthText);
-        person.birthYear = parsed.year;
-        person.birthMonth = parsed.month;
-        person.birthDay = parsed.day;
-      }
-
-      const placeEl = card.querySelector('.place');
-      if (placeEl) {
-        person.birthPlace = placeEl.textContent.trim();
-      }
-
-      return person;
-    }
-
-    function parseBirthDate(text) {
-      const months = ['january', 'february', 'march', 'april', 'may', 'june',
-                      'july', 'august', 'september', 'october', 'november', 'december'];
-
-      const result = { year: null, month: null, day: null };
-
-      const yearMatch = text.match(/\\b(\\d{4})\\b/);
-      if (yearMatch) result.year = parseInt(yearMatch[1]);
-
-      const lowerText = text.toLowerCase();
-      months.forEach((m, idx) => {
-        if (lowerText.includes(m)) result.month = idx + 1;
-      });
-
-      const dayMatch = text.match(/\\b(\\d{1,2})\\b(?!\\d)/);
-      if (dayMatch) {
-        const day = parseInt(dayMatch[1]);
-        if (day >= 1 && day <= 31) result.day = day;
-      }
-
-      return result;
     }
 
     // ============================================
@@ -3082,7 +2650,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
 
       // Update the embedded data
       html = html.replace(
-        /<script id="embeddedData" type="application\\/json">[^<]*<\\/script>/,
+        /<script id="embeddedData" type="application\\/json">[\\s\\S]*?<\\/script>/,
         '<script id="embeddedData" type="application/json">' + newEmbeddedData + '<\\/script>'
       );
 
@@ -3107,6 +2675,18 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
       html = html.replace(
         /<h1 id="headerTitle">[^<]*<\\/h1>/,
         '<h1 id="headerTitle">' + headerTitle + '</h1>'
+      );
+
+      // Fix header CSS: change display: flex to display: none (so it's hidden when JS is disabled)
+      html = html.replace(
+        /\\.header\\s*\\{([^}]*?)display:\\s*flex/,
+        '.header {$1display: none'
+      );
+
+      // Fix main-content CSS: ensure it's hidden by default
+      html = html.replace(
+        /\\.main-content\\s*\\{([^}]*?)display:\\s*block/,
+        '.main-content {$1display: none'
       );
 
       // Add DOCTYPE if missing
@@ -3134,6 +2714,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
       const children = personsData.filter(p => p.fatherId === personId || p.motherId === personId);
 
       const spouseIds = new Set();
+      // Add co-parents (people who share children with this person)
       children.forEach(child => {
         if (child.fatherId && child.fatherId !== personId) {
           if (personsData.find(p => p.id === child.fatherId)) spouseIds.add(child.fatherId);
@@ -3142,19 +2723,19 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
           if (personsData.find(p => p.id === child.motherId)) spouseIds.add(child.motherId);
         }
       });
-      // If no children, check explicit spouseId (bidirectional)
+      // Check explicit spouseId (only if no children, since co-parents already shown)
       if (children.length === 0) {
         if (person.spouseId && personsData.find(p => p.id === person.spouseId)) {
           spouseIds.add(person.spouseId);
         }
-        // Also check if anyone else has this person as their spouse
-        personsData.forEach(p => {
-          if (p.spouseId === personId) {
-            const pChildren = personsData.filter(c => c.fatherId === p.id || c.motherId === p.id);
-            if (pChildren.length === 0) spouseIds.add(p.id);
-          }
-        });
       }
+      // Always check if any childless person has this person as their spouse (bidirectional)
+      personsData.forEach(p => {
+        if (p.spouseId === personId) {
+          const pChildren = personsData.filter(c => c.fatherId === p.id || c.motherId === p.id);
+          if (pChildren.length === 0) spouseIds.add(p.id);
+        }
+      });
       const spouses = Array.from(spouseIds).map(id => personsData.find(p => p.id === id)).filter(p => p);
 
       let html = '';
@@ -3428,6 +3009,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
 
       // Get spouses (co-parents)
       const spouseIds = new Set();
+      // Add co-parents (people who share children with this person)
       children.forEach(child => {
         if (child.fatherId && child.fatherId !== personId) {
           if (personsData.find(p => p.id === child.fatherId)) spouseIds.add(child.fatherId);
@@ -3436,19 +3018,19 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
           if (personsData.find(p => p.id === child.motherId)) spouseIds.add(child.motherId);
         }
       });
-      // If no children, check explicit spouseId (bidirectional)
+      // Check explicit spouseId (only if no children, since co-parents already shown)
       if (children.length === 0) {
         if (person.spouseId && personsData.find(p => p.id === person.spouseId)) {
           spouseIds.add(person.spouseId);
         }
-        // Also check if anyone else has this person as their spouse
-        personsData.forEach(p => {
-          if (p.spouseId === personId) {
-            const pChildren = personsData.filter(c => c.fatherId === p.id || c.motherId === p.id);
-            if (pChildren.length === 0) spouseIds.add(p.id);
-          }
-        });
       }
+      // Always check if any childless person has this person as their spouse (bidirectional)
+      personsData.forEach(p => {
+        if (p.spouseId === personId) {
+          const pChildren = personsData.filter(c => c.fatherId === p.id || c.motherId === p.id);
+          if (pChildren.length === 0) spouseIds.add(p.id);
+        }
+      });
       const spouses = Array.from(spouseIds).map(id => personsData.find(p => p.id === id)).filter(p => p);
 
       let html = '';
