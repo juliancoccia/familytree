@@ -526,6 +526,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
     <button class="header-btn" onclick="openHtmlFile()">Open</button>
     <button class="header-btn" onclick="exportFullTreeHtml()" id="exportBtn" style="display:none;">Export HTML</button>
     <button class="header-btn" onclick="openExportPdfModal()" id="printBtn" style="display:none;">Export Cards</button>
+    <button class="header-btn" onclick="exportBirthdaysIcs()" id="icsBtn" style="display:none;">Export ICS</button>
     <button class="header-btn" onclick="clearTreeData()" id="clearBtn" style="display:none; color: #dc3545;">Clear</button>
   </div>
 
@@ -842,6 +843,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
         listBtn.style.display = 'none';
         exportBtn.style.display = 'none';
         document.getElementById('printBtn').style.display = 'none';
+        document.getElementById('icsBtn').style.display = 'none';
         document.getElementById('clearBtn').style.display = 'none';
         return;
       }
@@ -850,6 +852,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
       listBtn.style.display = 'block';
       exportBtn.style.display = 'block';
       document.getElementById('printBtn').style.display = 'block';
+      document.getElementById('icsBtn').style.display = 'block';
       document.getElementById('clearBtn').style.display = 'block';
 
       if (!focusedPersonId) {
@@ -1339,6 +1342,54 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
       const html = generateExportHtml(personsToExport, contextMenuPersonId);
       const safeName = getFullName(person).replace(/[^a-zA-Z0-9]/g, '_');
       downloadHtml(html, `FamilyTree${safeName}${formatDateTimeForFilename()}.html`);
+    }
+
+    // ============================================
+    // EXPORT BIRTHDAYS (ICS)
+    // ============================================
+    function exportBirthdaysIcs() {
+      const personsWithBirthday = persons.filter(p => p.birthMonth && p.birthDay);
+      if (personsWithBirthday.length === 0) {
+        alert('No birthdays to export. Persons need at least a birth month and day.');
+        return;
+      }
+
+      const lines = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//FamilyTree//Birthdays//EN'
+      ];
+
+      personsWithBirthday.forEach(p => {
+        const mm = String(p.birthMonth).padStart(2, '0');
+        const dd = String(p.birthDay).padStart(2, '0');
+        const year = p.birthYear || 1900;
+        const dtstart = `${year}${mm}${dd}`;
+        const name = getFullName(p);
+
+        lines.push('BEGIN:VEVENT');
+        lines.push(`UID:birthday-${p.id}@familytree`);
+        lines.push(`DTSTART;VALUE=DATE:${dtstart}`);
+        lines.push('RRULE:FREQ=YEARLY');
+        lines.push(`SUMMARY:${name}'s Birthday`);
+        if (p.birthYear) {
+          lines.push(`DESCRIPTION:Born ${p.birthYear}`);
+        }
+        lines.push('END:VEVENT');
+      });
+
+      lines.push('END:VCALENDAR');
+
+      const content = lines.join('\r\n');
+      const blob = new Blob([content], { type: 'text/calendar' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `FamilyBirthdays${formatDateTimeForFilename()}.ics`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     }
 
     // ============================================
