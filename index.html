@@ -695,7 +695,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
   </div>
 
   <script>
-    const APP_VERSION = '1.0';
+    const APP_VERSION = '1.1';
 
     // ============================================
     // DATA STORAGE
@@ -1335,10 +1335,36 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
         getSpouses(id).forEach(s => allIds.add(s.id));
       });
 
-      // Add parents of the root person
-      if (person.fatherId) allIds.add(person.fatherId);
-      if (person.motherId) allIds.add(person.motherId);
-      if (person.spouseId) allIds.add(person.spouseId);
+      // Add all ancestors (parents, grandparents, etc.), their siblings, spouses, and spouses' ancestry
+      const ancestorsVisited = new Set();
+      const addAncestors = (personId) => {
+        if (ancestorsVisited.has(personId)) return;
+        ancestorsVisited.add(personId);
+        const p = getPersonById(personId);
+        if (!p) return;
+        // Add siblings, their spouses, and recurse up spouses' ancestry
+        getSiblings(personId).forEach(s => {
+          allIds.add(s.id);
+          getSpouses(s.id).forEach(sp => {
+            allIds.add(sp.id);
+            addAncestors(sp.id);
+          });
+        });
+        // Add parents, their spouses, and recurse up all of them
+        if (p.fatherId) {
+          allIds.add(p.fatherId);
+          getSpouses(p.fatherId).forEach(s => { allIds.add(s.id); addAncestors(s.id); });
+          addAncestors(p.fatherId);
+        }
+        if (p.motherId) {
+          allIds.add(p.motherId);
+          getSpouses(p.motherId).forEach(s => { allIds.add(s.id); addAncestors(s.id); });
+          addAncestors(p.motherId);
+        }
+      };
+      addAncestors(contextMenuPersonId);
+      // Also trace ancestry of the selected person's spouses/co-parents
+      getSpouses(contextMenuPersonId).forEach(s => addAncestors(s.id));
 
       const personsToExport = persons.filter(p => allIds.has(p.id));
       const html = generateExportHtml(personsToExport, contextMenuPersonId);
@@ -1684,14 +1710,17 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
       const staticViewEl = document.getElementById('staticView');
       const mainContentEl = document.getElementById('mainContent');
       const photoPreviewEl = document.getElementById('photoPreview');
+      const personListEl = document.getElementById('personList');
       const savedStaticStyle = staticViewEl.getAttribute('style');
       const savedMainStyle = mainContentEl.getAttribute('style');
       const savedMainHtml = mainContentEl.innerHTML;
       const savedPhotoPreview = photoPreviewEl.innerHTML;
+      const savedPersonList = personListEl.innerHTML;
       staticViewEl.removeAttribute('style');
       mainContentEl.removeAttribute('style');
       mainContentEl.innerHTML = '';
       photoPreviewEl.innerHTML = '<span class="placeholder">No photo</span>';
+      personListEl.innerHTML = '';
 
       // Clone clean document
       let html = document.documentElement.outerHTML;
@@ -1701,6 +1730,7 @@ Copyright (C) 2026 Julian Coccia. Released under the Elicitor's Code License 1.0
       if (savedMainStyle) mainContentEl.setAttribute('style', savedMainStyle);
       mainContentEl.innerHTML = savedMainHtml;
       photoPreviewEl.innerHTML = savedPhotoPreview;
+      personListEl.innerHTML = savedPersonList;
 
       // Update the embedded data
       html = html.replace(
